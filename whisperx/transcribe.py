@@ -2,6 +2,7 @@ import argparse
 import gc
 import os
 import warnings
+import re
 
 import numpy as np
 import torch
@@ -26,7 +27,7 @@ def cli():
     parser.add_argument("--compute_type", default="float16", type=str, choices=["float16", "float32", "int8"], help="compute type for computation")
 
     parser.add_argument("--output_dir", "-o", type=str, default=".", help="directory to save the outputs")
-    parser.add_argument("--output_format", "-f", type=str, default="all", choices=["all", "srt", "vtt", "txt", "tsv", "json", "aud"], help="format of the output file; if not specified, all available formats will be produced")
+    parser.add_argument("--output_format", "-f", type=str, default="all", choices=["all", "srt", "vtt", "txt", "tsv", "json", "aud", "scp"], help="format of the output file; if not specified, all available formats will be produced")
     parser.add_argument("--verbose", type=str2bool, default=True, help="whether to print out the progress and debug messages")
 
     parser.add_argument("--task", type=str, default="transcribe", choices=["transcribe", "translate"], help="whether to perform X->X speech recognition ('transcribe') or X->English translation ('translate')")
@@ -136,7 +137,8 @@ def cli():
         "suppress_numerals": args.pop("suppress_numerals"),
     }
 
-    writer = get_writer(output_format, output_dir)
+    if output_format != "scp":
+        writer = get_writer(output_format, output_dir)
     word_options = ["highlight_words", "max_line_count", "max_line_width"]
     if no_align:
         for option in word_options:
@@ -152,12 +154,27 @@ def cli():
     # model = load_model(model_name, device=device, download_root=model_dir)
     model = load_model(model_name, device=device, device_index=device_index, compute_type=compute_type, language=args['language'], asr_options=asr_options, vad_options={"vad_onset": vad_onset, "vad_offset": vad_offset}, task=task)
 
-    for audio_path in args.pop("audio"):
-        audio = load_audio(audio_path)
-        # >> VAD & ASR
-        print(">>Performing transcription...")
-        result = model.transcribe(audio, batch_size=batch_size)
-        results.append((result, audio_path))
+    audio_args = args.pop("audio")
+    print(">>Performing transcription...")
+    for audio_path in audio_args:
+        if output_format == 'scp':
+            with open(audio_path, "r") as file:
+                lines = file.readlines()
+            for line in lines:
+                uttid, audio_path = line.split(' ')
+                uttid = uttid.strip()
+                audio_path = audio_path.strip()
+            
+                audio = load_audio(audio_path)
+                # >> VAD & ASR
+                result = model.transcribe(audio, batch_size=batch_size)
+                results.append((uttid, result, audio_path))
+        else:
+            audio = load_audio(audio_path)
+            # >> VAD & ASR
+            print(">>Performing transcription...")
+            result = model.transcribe(audio, batch_size=batch_size)
+            results.append((result, audio_path))
 
     # Unload Whisper and VAD
     del model
@@ -170,7 +187,12 @@ def cli():
         results = []
         align_language = args["language"] if args["language"] is not None else "en" # default to loading english if not specified
         align_model, align_metadata = load_align_model(align_language, device, model_name=align_model)
-        for result, audio_path in tmp_results:
+        print(">>Performing alignment...")
+        for tmp_result in tmp_results:
+            if output_format == "scp":
+                uttid, result, audio_path = tmp_result
+            else:
+                result, audio_path = tmp_result
             # >> Align
             if len(tmp_results) > 1:
                 input_audio = audio_path
@@ -183,10 +205,12 @@ def cli():
                     # load new language
                     print(f"New language found ({result['language']})! Previous was ({align_metadata['language']}), loading new alignment model for new language...")
                     align_model, align_metadata = load_align_model(result["language"], device)
-                print(">>Performing alignment...")
                 result = align(result["segments"], align_model, align_metadata, input_audio, device, interpolate_method=interpolate_method, return_char_alignments=return_char_alignments)
 
-            results.append((result, audio_path))
+            if output_format == "scp":
+                results.append((uttid, result, audio_path))
+            else:
+                results.append((result, audio_path))
 
         # Unload align model
         del align_model
@@ -206,8 +230,22 @@ def cli():
             result = assign_word_speakers(diarize_segments, result)
             results.append((result, input_audio_path))
     # >> Write
-    for result, audio_path in results:
-        writer(result, audio_path, writer_args)
+    print(">>Performing result writing...")
+    if output_format == "scp":
+        # utils' writer class writes the result to one file, so scp writes with separate logic.
+        for audio_path in audio_args:
+            filename = os.path.basename(audio_path).split('.')[0]
+            output_path = os.path.join(output_dir, filename + f".{output_format}")
+            with open(output_path, "w") as fw:
+                for uttid, result, audio_path in results:
+                    segments = result['segments']
+                    text_list = [seg['text'].strip() + ' ' for seg in segments]
+                    text = ''.join(text_list).rstrip()
+                    text = re.sub('[.,?"]', '', text)
+                    fw.write(f'{uttid} {text}\n')
+    else:
+        for result, audio_path in results:
+            writer(result, audio_path, writer_args)
 
 if __name__ == "__main__":
     cli()
