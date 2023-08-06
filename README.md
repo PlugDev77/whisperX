@@ -193,7 +193,7 @@ from whisperx import module
 result = module.get_transcription(
   audio_file="audio.mp3",
   model="large-v2",
-  language="en",s
+  language="en",
 )
 
 print(result)
