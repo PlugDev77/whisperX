@@ -185,6 +185,20 @@ print(diarize_segments)
 print(result["segments"]) # segments are now assigned speaker IDs
 ```
 
+## Python module usage  🐍
+
+```python
+from whisperx import module
+
+result = module.get_transcription(
+  audio_file="audio.mp3",
+  model="large-v2",
+  language="en",s
+)
+
+print(result)
+```
+
 ## Demos 🚀
 
 [![Replicate](https://replicate.com/daanelson/whisperx/badge)](https://replicate.com/daanelson/whisperx) 

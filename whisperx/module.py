@@ -6,7 +6,7 @@ def get_transcription(
     audio_file: str,
     model: str = "large-v2",
     language: str = "en",
-    device: str = "cuda",
+    device: str = "cuda" if torch.cuda.is_available() else "cpu",
     device_index: int = 0,
     batch_size: int = 16,           # reduce if low on GPU mem
     compute_type: str = "float16"   # ["float16", "float32", "int8"] change to "int8" if low on GPU mem (may reduce accuracy)
